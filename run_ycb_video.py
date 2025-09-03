@@ -6,9 +6,8 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
-
 from Utils import *
-import json,uuid,joblib,os,sys,argparse
+import json, uuid, joblib, os, sys, argparse
 from datareader import *
 from estimater import *
 code_dir = os.path.dirname(os.path.realpath(__file__))
@@ -30,14 +29,23 @@ def get_mask(reader, i_frame, ob_id, detect_type):
   elif detect_type=='mask':
     mask = reader.get_mask(i_frame, ob_id, type='mask_visib')
     valid = mask>0
-  elif detect_type=='cnos':   #https://github.com/nv-nguyen/cnos
+  elif detect_type=='cnos':   # https://github.com/nv-nguyen/cnos
     mask = cv2.imread(reader.color_files[i_frame].replace('rgb','mask_cnos'), -1)
     valid = mask==ob_id
   else:
     raise RuntimeError
-
   return valid
 
+
+def visualize_pose(color, pose, K, mesh):
+  """Overlay 3D bounding box + axes on the RGB image."""
+  to_origin, extents = trimesh.bounds.oriented_bounds(mesh)
+  bbox = np.stack([-extents/2, extents/2], axis=0).reshape(2,3)
+
+  center_pose = pose @ np.linalg.inv(to_origin)
+  vis = draw_posed_3d_box(K, img=color, ob_in_cam=center_pose, bbox=bbox)
+  vis = draw_xyz_axis(vis, ob_in_cam=center_pose, scale=0.1, K=K, thickness=2, transparency=0, is_input_rgb=True)
+  return vis
 
 
 def run_pose_estimation_worker(reader, i_frames, est:FoundationPose, debug=False, ob_id=None, device:int=0):
@@ -54,7 +62,6 @@ def run_pose_estimation_worker(reader, i_frames, est:FoundationPose, debug=False
     color = reader.get_color(i_frame)
     depth = reader.get_depth(i_frame)
 
-    H,W = color.shape[:2]
     scene_ob_ids = reader.get_instance_ids_in_image(i_frame)
     video_id = reader.get_video_id()
 
@@ -62,17 +69,26 @@ def run_pose_estimation_worker(reader, i_frames, est:FoundationPose, debug=False
     if ob_id not in scene_ob_ids:
       logging.info(f'skip {ob_id} as it does not exist in this scene')
       continue
+
     ob_mask = get_mask(reader, i_frame, ob_id, detect_type=detect_type)
 
     est.gt_pose = reader.get_gt_pose(i_frame, ob_id)
     pose = est.register(K=reader.K, rgb=color, depth=depth, ob_mask=ob_mask, ob_id=ob_id, iteration=5)
     logging.info(f"pose:\n{pose}")
 
-
+    # Save mesh pose (debug>=3)
     if debug>=3:
       tmp = est.mesh_ori.copy()
       tmp.apply_transform(pose)
       tmp.export(f'{debug_dir}/model_tf.obj')
+
+    # Visualization (debug>=1)
+    if debug>=1:
+      vis = visualize_pose(color, pose, reader.K, est.mesh_ori)
+      os.makedirs(f"{debug_dir}/vis", exist_ok=True)
+      out_path = f"{debug_dir}/vis/{video_id}_{id_str}_{ob_id}.png"
+      imageio.imwrite(out_path, vis)
+      logging.info(f"Saved visualization to {out_path}")
 
     result[video_id][id_str][ob_id] = pose
 
@@ -130,11 +146,10 @@ def run_pose_estimation():
     yaml.safe_dump(make_yaml_dumpable(res), ff)
 
 
-
 if __name__=='__main__':
   parser = argparse.ArgumentParser()
   code_dir = os.path.dirname(os.path.realpath(__file__))
-  parser.add_argument('--ycbv_dir', type=str, default="/mnt/9a72c439-d0a7-45e8-8d20-d7a235d02763/DATASET/YCB_Video", help="data dir")
+  parser.add_argument('--ycbv_dir', type=str, default="/home/student/Desktop/Perception_new/FoundationPose/demo_data/YCB_Video", help="data dir")
   parser.add_argument('--use_reconstructed_mesh', type=int, default=0)
   parser.add_argument('--ref_view_dir', type=str, default="/mnt/9a72c439-d0a7-45e8-8d20-d7a235d02763/DATASET/YCB_Video/bowen_addon/ref_views_16")
   parser.add_argument('--debug', type=int, default=0)

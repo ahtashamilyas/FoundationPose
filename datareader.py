@@ -8,6 +8,25 @@
 
 
 from Utils import *
+try:
+  from trimesh.transformations import euler_matrix  # preferred
+except Exception:  # fallback
+  try:
+    from transforms3d.euler import euler2mat as _euler2mat
+    def euler_matrix(rx, ry, rz):
+      M = np.eye(4)
+      M[:3,:3] = _euler2mat(rx, ry, rz)
+      return M
+  except Exception:
+    def euler_matrix(rx, ry, rz):  # minimal fallback implementation ZYX order
+      cx,cy,cz = np.cos([rx,ry,rz])
+      sx,sy,sz = np.sin([rx,ry,rz])
+      Rz = np.array([[cz,-sz,0],[sz,cz,0],[0,0,1]])
+      Ry = np.array([[cy,0,sy],[0,1,0],[-sy,0,cy]])
+      Rx = np.array([[1,0,0],[0,cx,-sx],[0,sx,cx]])
+      R = Rz@Ry@Rx
+      M = np.eye(4); M[:3,:3]=R
+      return M
 import json,os,sys
 
 
@@ -522,11 +541,23 @@ class YcbVideoReader(BopBaseReader):
 
 
   def is_keyframe(self, i):
+    # Keyframe list (keyframe.txt) uses 6-digit zero-padded scene ids (e.g. 000048/000001)
+    # Previous implementation cast scene id to int and formatted with 4 digits (0048), causing no matches.
+    # Preserve original directory name to build key; fall back to old pattern for safety.
+    if not hasattr(self, 'keyframe_lines'):
+      return True  # If no keyframe list loaded, treat all as keyframes
     color_file = self.color_files[i]
-    video_id = self.get_video_id()
     frame_id = int(os.path.basename(color_file).split('.')[0])
-    key = f'{video_id:04d}/{frame_id:06d}'
-    return (key in self.keyframe_lines)
+    video_id_str = os.path.basename(self.base_dir)  # e.g. '000048'
+    key_exact = f'{video_id_str}/{frame_id:06d}'
+    if key_exact in self.keyframe_lines:
+      return True
+    # Fallback (legacy 4-digit formatting) in case some lists use 4-digit ids
+    try:
+      key_legacy = f'{int(video_id_str):04d}/{frame_id:06d}'
+      return key_legacy in self.keyframe_lines
+    except ValueError:
+      return False
 
 
 

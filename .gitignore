@@ -156,3 +156,13 @@ data/
 logs/
 !BundleTrack/XMem/inference/data
 run_used.yml
+
+
+
+# Ignore everything
+# But not these files/folders
+!Utils.py
+!run_demo.py
+!estimater.py
+!datareader.py
+!learning/
